@@ -110,4 +110,12 @@ struct AppConfig {
     static var useOpenSkyAuth: Bool {
         return provider == .opensky && Secrets.clientSecret != "DhHI9vrwhuWNe7FcbIemEu220afIWXcN"
     }
+
+    // UI Customization
+    static var mapIconSize: CGFloat = 28 // Size of airplane icons on map (normal state)
+    static var mapIconSizeSelected: CGFloat = 56 // Size when selected (2x normal)
+    static var listIconSize: CGFloat = 24 // Size in flight list
+    static var listFontSize: CGFloat = 24 // Font size in flight list
+    static var searchIconSize: CGFloat = 50 // Size in search results
+    static var searchFontSize: CGFloat = 22 // Font size in search results
 }

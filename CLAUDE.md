@@ -107,25 +107,49 @@ static var defaultRadius: Double = 250.0       // Nautical miles (max 250)
 7. **Viewport Tracking**: `onChange(of: mapCameraPosition)` extracts region for potential re-fetch
 8. **Selection**: In Select mode, tapping annotation triggers `fetchTrack(for:)` (OpenSky only)
 
-## UI Interaction Patterns
+## UI Architecture (tvOS HIG Compliant)
 
-### Control Modes (ContentView.swift:17-39)
-The app has 4 control modes accessed via center button:
+### Tab-Based Navigation
+The app uses tvOS TabView with 3 main sections:
 
-1. **Pan Mode**: Direction keys move map (1 degree per press)
-2. **Zoom Mode**: Up/Down keys zoom in/out (1.5x factor)
-3. **Select Mode**: Navigate and select flights with direction keys + center
-4. **Search Mode**: Text field appears, type to filter flights
+1. **Map Tab**: Main flight tracking view with focus-based navigation
+   - Nearby Flights List (left, focusable items)
+   - Map Controls (right, focusable buttons for zoom/reset)
+   - Selected Flight Overlay (modal detail view)
 
-### Remote Controls
-- **Center Button (Short Press)**: Cycle through control modes
-- **Center Button (Long Press 0.5s)**: Toggle control mode UI on/off
-- **Direction Keys**: Context-aware based on active mode
-- **Play/Pause**: Toggle all UI visibility
+2. **Search Tab**: Dedicated search interface
+   - Auto-focused search field
+   - Large, focusable result cards
+   - Tapping result switches to Map tab with flight centered
+
+3. **Settings Tab**: Configuration viewer
+   - Focusable setting rows
+   - Shows current API provider, refresh rate, location
+
+### Focus-Based Interaction (ContentView.swift)
+All UI elements follow tvOS focus system:
+- `.focusable()` modifier on interactive elements
+- `@Environment(\.isFocused)` for visual feedback
+- Scale (1.05x) and brightness changes when focused
+- Smooth animations (0.2s ease-in-out)
+
+### Siri Remote Navigation
+- **Swipe Left/Right**: Switch between tabs
+- **Swipe Up/Down**: Navigate focusable items in lists
+- **Click**: Select focused item
+- **Touchpad Pan**: Natural map panning
+- **X Button (on overlay)**: Dismiss flight details
+
+### Typography & Spacing (Distance-Optimized)
+- **Titles**: 48pt bold (readable from 10 feet)
+- **Headers**: 32pt heavy
+- **Body**: Title2/Headline
+- **Margins**: 60pt (TV-safe areas)
+- **Padding**: 24-40pt (generous touch targets)
 
 ### Location-Based Features
 - **Initial View**: Centers on user location with 5-degree span
-- **Viewport Updates**: Map tracks current region for potential optimized fetching
+- **Viewport Updates**: Map tracks current region for optimized fetching (0.5s debounce)
 - **Radius**: 500 statute miles (~250 NM for API limit)
 - **tvOS Limitation**: Apple TV doesn't have GPS, uses network-based approximate location or Config.swift defaults
 - **Fallback**: Uses center of US (39.8283, -98.5795) if location unavailable
