@@ -118,4 +118,19 @@ struct AppConfig {
     static var listFontSize: CGFloat = 24 // Font size in flight list
     static var searchIconSize: CGFloat = 50 // Size in search results
     static var searchFontSize: CGFloat = 22 // Font size in search results
+
+    // Unit Settings
+    enum SpeedUnit: String, CaseIterable {
+        case knots = "Knots"
+        case mph = "MPH"
+        case kph = "KPH"
+    }
+
+    enum AltitudeUnit: String, CaseIterable {
+        case feet = "Feet"
+        case meters = "Meters"
+    }
+
+    static var speedUnit: SpeedUnit = .knots
+    static var altitudeUnit: AltitudeUnit = .feet
 }

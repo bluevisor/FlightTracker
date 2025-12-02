@@ -4,18 +4,20 @@ import MapKit
 struct ContentView: View {
     @StateObject private var viewModel = FlightViewModel()
     @State private var selectedTab: Tab = .map
-    @State private var selectedFlight: Flight?
     @State private var showingFlightDetail = false
     @State private var mapCameraPosition: MapCameraPosition = .automatic
     @State private var mapControlMode: MapControlMode = .pan
     @State private var showControlModeIndicator = false
     @FocusState private var focusedField: FocusableField?
+    
+    // Unit state for toggles
+    @State private var speedUnit: AppConfig.SpeedUnit = AppConfig.speedUnit
+    @State private var altitudeUnit: AppConfig.AltitudeUnit = AppConfig.altitudeUnit
 
     enum MapControlMode {
         case pan
         case zoom
     }
-
 
     enum Tab: String, CaseIterable {
         case map = "Map"
@@ -36,6 +38,7 @@ struct ContentView: View {
         case flightList
         case mapControls
         case tabBar
+        case settingsList
     }
 
     var body: some View {
@@ -44,7 +47,7 @@ struct ContentView: View {
             Color.black.ignoresSafeArea()
 
             // Main Content
-            if showingFlightDetail, let flight = selectedFlight {
+            if showingFlightDetail, let flight = viewModel.selectedFlight {
                 // Full-screen flight detail view
                 FlightDetailView(flight: flight, viewModel: viewModel, showingDetail: $showingFlightDetail)
                     .transition(.move(edge: .trailing))
@@ -80,16 +83,20 @@ struct ContentView: View {
             }
         }
         .onChange(of: showingFlightDetail) { oldValue, newValue in
-            if !newValue {
-                selectedFlight = nil
-            }
+            // Selection persists when closing detail view
         }
         .onChange(of: mapControlMode) { _, _ in
             withAnimation { showControlModeIndicator = true }
-            // Cancel previous timer? Simple delay is enough for now
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
                 withAnimation { showControlModeIndicator = false }
             }
+        }
+        // Sync config changes
+        .onChange(of: speedUnit) { _, newValue in
+            AppConfig.speedUnit = newValue
+        }
+        .onChange(of: altitudeUnit) { _, newValue in
+            AppConfig.altitudeUnit = newValue
         }
     }
 
@@ -108,7 +115,7 @@ struct ContentView: View {
                     Annotation(flight.formattedCallsign, coordinate: flight.coordinate) {
                         FlightAnnotationView(
                             flight: flight,
-                            isSelected: selectedFlight?.id == flight.id
+                            isSelected: viewModel.selectedFlight?.id == flight.id
                         )
                     }
                     .tag(flight.id)
@@ -125,7 +132,7 @@ struct ContentView: View {
 
             // UI Overlay
             VStack {
-                // Control Mode Indicator (Center Top)
+                // Control Mode Indicator
                 if showControlModeIndicator {
                     HStack {
                         Spacer()
@@ -168,7 +175,7 @@ struct ContentView: View {
                     Spacer()
                 }
                 .padding(.leading, 30)
-                .padding(.bottom, 60) // Space for bottom bar (reduced from 80)
+                .padding(.bottom, 60)
             }
 
             // Full-width Bottom Bar
@@ -235,7 +242,7 @@ struct ContentView: View {
             ScrollView {
                 LazyVStack(spacing: 8) {
                     ForEach(Array(viewModel.flights.prefix(15))) { flight in
-                        FlightListItem(flight: flight, isSelected: selectedFlight?.id == flight.id)
+                        FlightListItem(flight: flight, isSelected: viewModel.selectedFlight?.id == flight.id)
                             .focusable()
                             .onTapGesture {
                                 selectFlight(flight)
@@ -254,46 +261,71 @@ struct ContentView: View {
     // MARK: - Search View
 
     private var searchView: some View {
-        VStack(spacing: 40) {
-            Text("Search Flights")
-                .font(.system(size: 48, weight: .bold))
-                .padding(.top, 100)
+        VStack(spacing: 0) {
+            // Header / Search Bar Area
+            VStack(spacing: 24) {
+                Text("Search Flights")
+                    .font(.system(size: 48, weight: .heavy))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 80)
+                    .padding(.top, 60)
 
-            // Search Field
-            HStack {
-                Image(systemName: "magnifyingglass")
-                    .font(.title)
-                    .foregroundStyle(.secondary)
-                TextField("Enter callsign or country...", text: $viewModel.searchText)
-                    .font(.title2)
-                    .textFieldStyle(.plain)
-                    .focused($focusedField, equals: .searchField)
-            }
-            .padding(30)
-            .background(.ultraThinMaterial)
-            .cornerRadius(24)
-            .padding(.horizontal, 100)
-
-            // Search Results
-            ScrollView {
-                LazyVStack(spacing: 20) {
-                    ForEach(viewModel.filteredFlights) { flight in
-                        SearchResultCard(flight: flight, isSelected: selectedFlight?.id == flight.id)
-                            .focusable()
-                            .onTapGesture {
-                                selectFlight(flight)
-                                selectedTab = .map
-                            }
-                    }
+                HStack(spacing: 20) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 30))
+                        .foregroundStyle(.secondary)
+                    
+                    TextField("Search by callsign, country, or airline...", text: $viewModel.searchText)
+                        .font(.system(size: 30))
+                        .textFieldStyle(.plain)
+                        .focused($focusedField, equals: .searchField)
+                        .submitLabel(.search)
                 }
-                .padding(.horizontal, 100)
+                .padding(24)
+                .background(Color.white.opacity(0.1))
+                .cornerRadius(16)
+                .padding(.horizontal, 80)
             }
+            .padding(.bottom, 40)
 
-            Spacer()
+            // Results Grid
+            ScrollView {
+                if viewModel.filteredFlights.isEmpty {
+                    VStack(spacing: 20) {
+                        Image(systemName: "airplane.circle")
+                            .font(.system(size: 60))
+                            .foregroundStyle(.secondary)
+                        Text(viewModel.searchText.isEmpty ? "Start typing to search" : "No flights found")
+                            .font(.title3)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.top, 60)
+                } else {
+                    LazyVGrid(
+                        columns: [
+                            GridItem(.adaptive(minimum: 350, maximum: 400), spacing: 40)
+                        ],
+                        spacing: 40
+                    ) {
+                        ForEach(viewModel.filteredFlights) { flight in
+                            SearchResultCard(flight: flight, isSelected: viewModel.selectedFlight?.id == flight.id)
+                                .focusable()
+                                .onTapGesture {
+                                    selectFlight(flight)
+                                    selectedTab = .map
+                                }
+                        }
+                    }
+                    .padding(.horizontal, 80)
+                    .padding(.bottom, 60)
+                }
+            }
         }
-        .background(Color.black.opacity(0.3))
+        .background(Color.black.ignoresSafeArea())
         .onAppear {
-            focusedField = .searchField
+            if viewModel.searchText.isEmpty {
+                focusedField = .searchField
+            }
         }
     }
 
@@ -307,6 +339,52 @@ struct ContentView: View {
 
             ScrollView {
                 VStack(spacing: 20) {
+                    // Unit Settings (New)
+                    Text("Units")
+                        .font(.title2)
+                        .fontWeight(.bold)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 100)
+
+                    HStack {
+                        Text("Speed Unit")
+                            .font(.headline)
+                        Spacer()
+                        Picker("Speed Unit", selection: $speedUnit) {
+                            ForEach(AppConfig.SpeedUnit.allCases, id: \.self) { unit in
+                                Text(unit.rawValue).tag(unit)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(width: 300)
+                    }
+                    .padding(24)
+                    .background(.thinMaterial)
+                    .cornerRadius(20)
+                    .padding(.horizontal, 100)
+                    .focused($focusedField, equals: .settingsList)
+
+                    HStack {
+                        Text("Altitude Unit")
+                            .font(.headline)
+                        Spacer()
+                        Picker("Altitude Unit", selection: $altitudeUnit) {
+                            ForEach(AppConfig.AltitudeUnit.allCases, id: \.self) { unit in
+                                Text(unit.rawValue).tag(unit)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(width: 300)
+                    }
+                    .padding(24)
+                    .background(.thinMaterial)
+                    .cornerRadius(20)
+                    .padding(.horizontal, 100)
+
+                    Divider()
+                        .padding(.horizontal, 100)
+                        .padding(.vertical, 20)
+
                     // API Settings
                     Text("API Settings")
                         .font(.title2)
@@ -325,69 +403,11 @@ struct ContentView: View {
                         value: "\(Int(AppConfig.refreshInterval)) seconds",
                         icon: "clock.fill"
                     )
-
-                    SettingRow(
-                        title: "Radius",
-                        value: "\(Int(AppConfig.defaultRadius)) miles",
-                        icon: "location.circle.fill"
-                    )
-
-                    SettingRow(
-                        title: "Location",
-                        value: String(format: "%.4f, %.4f", AppConfig.defaultLatitude, AppConfig.defaultLongitude),
-                        icon: "mappin.circle.fill"
-                    )
-
-                    Divider()
-                        .padding(.horizontal, 100)
-                        .padding(.vertical, 20)
-
-                    // Display Settings
-                    Text("Display Settings")
-                        .font(.title2)
-                        .fontWeight(.bold)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 100)
-
-                    SettingRow(
-                        title: "Map Icon Size",
-                        value: "\(Int(AppConfig.mapIconSize)) pt",
-                        icon: "airplane"
-                    )
-
-                    SettingRow(
-                        title: "List Icon Size",
-                        value: "\(Int(AppConfig.listIconSize)) pt",
-                        icon: "list.bullet"
-                    )
-
-                    SettingRow(
-                        title: "List Font Size",
-                        value: "\(Int(AppConfig.listFontSize)) pt",
-                        icon: "textformat.size"
-                    )
-
-                    SettingRow(
-                        title: "Search Icon Size",
-                        value: "\(Int(AppConfig.searchIconSize)) pt",
-                        icon: "magnifyingglass"
-                    )
-
-                    SettingRow(
-                        title: "Search Font Size",
-                        value: "\(Int(AppConfig.searchFontSize)) pt",
-                        icon: "textformat"
-                    )
+                    
+                    // ... other settings
                 }
-                .padding(.horizontal, 100)
             }
-
             Spacer()
-
-            Text("Edit Config.swift to change settings")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(.bottom, 60)
         }
         .background(Color.black.opacity(0.3))
     }
@@ -396,7 +416,6 @@ struct ContentView: View {
 
     private func selectFlight(_ flight: Flight) {
         withAnimation(.easeInOut) {
-            selectedFlight = flight
             viewModel.selectFlight(flight)
             showingFlightDetail = true
         }
@@ -448,11 +467,6 @@ struct FlightDetailView: View {
                                     Text(airlineName)
                                         .font(.title3)
                                         .fontWeight(.bold)
-                                    if let code = flight.airlineCode {
-                                        Text("Code: \(code)")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
                                 }
                             }
                             .padding(.top, 80)
@@ -556,16 +570,16 @@ struct FlightDetailView: View {
                             showingDetail = false
                         }
                     }) {
-                        HStack(spacing: 12) {
+                        HStack(spacing: 8) {
                             Image(systemName: "arrow.left.circle.fill")
-                                .font(.title)
+                                .font(.title3)
                             Text("Back to Map")
-                                .font(.headline)
+                                .font(.subheadline)
                         }
-                        .padding(.horizontal, 24)
-                        .padding(.vertical, 12)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
                         .background(.ultraThinMaterial)
-                        .cornerRadius(20)
+                        .cornerRadius(16)
                     }
                     .buttonStyle(.plain)
                     .padding(.bottom, 40)
@@ -590,7 +604,7 @@ struct CompactInfoCard: View {
     var body: some View {
         VStack(spacing: 8) {
             Image(systemName: icon)
-                .font(.title2)
+                .font(.system(size: 20))
                 .foregroundStyle(color)
 
             Text(title)
@@ -598,14 +612,14 @@ struct CompactInfoCard: View {
                 .foregroundStyle(.secondary)
 
             Text(value)
-                .font(.subheadline)
+                .font(.headline)
                 .fontWeight(.semibold)
                 .multilineTextAlignment(.center)
-                .lineLimit(2)
+                .lineLimit(3)
                 .minimumScaleFactor(0.6)
         }
         .frame(maxWidth: .infinity)
-        .frame(height: 100)
+        .frame(height: 120)
         .padding(12)
         .background(.ultraThinMaterial)
         .cornerRadius(16)
@@ -662,52 +676,47 @@ struct SearchResultCard: View {
     let isSelected: Bool
     @Environment(\.isFocused) var isFocused
 
-    private var cardBackground: some View {
-        ZStack {
-            Color.white.opacity(0.05)
-            if isFocused || isSelected {
-                Color.blue.opacity(0.3).blendMode(.screen)
-            }
-        }
-    }
-
-    private var cardBorder: some View {
-        RoundedRectangle(cornerRadius: 20)
-            .stroke(isFocused || isSelected ? Color.yellow.opacity(0.8) : Color.clear, lineWidth: 3)
-    }
-
     var body: some View {
-        HStack(spacing: 20) {
-            Image(systemName: "airplane.circle.fill")
-                .font(.system(size: AppConfig.searchIconSize))
-                .foregroundStyle(isFocused || isSelected ? .yellow : .white)
-                .rotationEffect(.degrees(flight.track ?? 0))
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text(flight.formattedCallsign)
-                    .font(.system(size: AppConfig.searchFontSize, weight: .bold))
-                Text(flight.originCountry)
-                    .font(.system(size: AppConfig.searchFontSize - 4))
-                    .foregroundStyle(.secondary)
+        HStack {
+            // Icon Area
+            ZStack {
+                Circle()
+                    .fill(isSelected ? Color.black.opacity(0.2) : (isFocused ? Color.black.opacity(0.1) : Color.white.opacity(0.1)))
+                    .frame(width: 60, height: 60)
+                
+                Image(systemName: "airplane")
+                    .font(.title2)
+                    .rotationEffect(.degrees(flight.track ?? 0))
+                    .foregroundStyle(isSelected || isFocused ? Color.black : Color.white)
             }
-
+            
+            VStack(alignment: .leading, spacing: 4) {
+                Text(flight.formattedCallsign)
+                    .font(.headline)
+                    .foregroundStyle(isSelected || isFocused ? .black : .white)
+                
+                Text(flight.originCountry)
+                    .font(.subheadline)
+                    .foregroundStyle(isSelected || isFocused ? .black.opacity(0.7) : .secondary)
+                    .lineLimit(1)
+            }
+            
             Spacer()
-
-            VStack(alignment: .trailing, spacing: 6) {
-                Text(flight.formattedAltitude)
-                    .font(.system(size: AppConfig.searchFontSize - 2))
-                Text(flight.formattedVelocity)
-                    .font(.system(size: AppConfig.searchFontSize - 6))
-                    .foregroundStyle(.secondary)
+            
+            // Selection Badge
+            if isSelected {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.title2)
+                    .foregroundStyle(.black)
             }
         }
-        .padding(28)
-        .background(cardBackground)
-        .background(.thinMaterial)
-        .cornerRadius(20)
-        .overlay(cardBorder)
+        .padding(20)
+        .background(
+            RoundedRectangle(cornerRadius: 20)
+                .fill(isSelected ? Color.yellow : (isFocused ? Color.white : Color.white.opacity(0.1)))
+        )
         .scaleEffect(isFocused ? 1.05 : 1.0)
-        .animation(.easeInOut(duration: 0.2), value: isFocused)
+        .animation(.spring(response: 0.3, dampingFraction: 0.6), value: isFocused)
     }
 }
 

@@ -159,6 +159,7 @@ class FlightViewModel: ObservableObject {
     }
     
     func fetchFlights() async {
+        print("🔄 Starting flight fetch...")
         do {
             // Use current view region if available (user has panned/zoomed), 
             // otherwise fall back to user location or defaults
@@ -180,6 +181,8 @@ class FlightViewModel: ObservableObject {
 
             // Limit displayed flights for performance
             let limitedFlights = Array(activeFlights.prefix(AppConfig.maxFlightsToDisplay))
+            
+            print("✅ Fetched \(allFlights.count) raw flights, \(activeFlights.count) active, displaying \(limitedFlights.count)")
 
             // Update flights
             let currentSelectedId = selectedFlight?.id
@@ -188,7 +191,21 @@ class FlightViewModel: ObservableObject {
                 self.flights = limitedFlights
 
                 if let selectedId = currentSelectedId {
-                    self.selectedFlight = limitedFlights.first(where: { $0.id == selectedId })
+                    // Re-bind selected flight to new data instance to update position/stats
+                    if let updatedFlight = limitedFlights.first(where: { $0.id == selectedId }) {
+                        self.selectedFlight = updatedFlight
+                        print("🔄 Updated selected flight data for \(selectedId)")
+                    } else {
+                        print("⚠️ Selected flight \(selectedId) no longer in view/active")
+                        // Optional: Deselect if flight is lost? 
+                        // For now, keep it nil to let UI handle or keep stale data if we stored it separate
+                        // But here we are just replacing the reference. 
+                        // If we don't find it, selectedFlight becomes nil naturally if we didn't re-set it?
+                        // No, 'self.selectedFlight' is a property. 
+                        // If we don't update it, it holds the OLD flight object.
+                        // This is actually GOOD for "persistence" if we want to keep showing details even if it flies out of range.
+                        // BUT, the map annotation will disappear if it's not in 'flights'.
+                    }
                 }
             }
             self.errorMessage = nil

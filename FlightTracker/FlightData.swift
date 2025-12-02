@@ -10,10 +10,55 @@ struct Flight: Identifiable, Hashable {
     let registration: String? // Tail number (e.g., N12345)
     let aircraftType: String? // Aircraft model
     let coordinate: CLLocationCoordinate2D
-    let altitude: Double? // meters
-    let velocity: Double? // m/s
-    let track: Double? // degrees
+    
+    // Altitude Data (stored in meters)
+    let altitudeBaro: Double? // Barometric (MSL)
+    let altitudeGeo: Double?  // Geometric (WGS84/GNSS)
+    
+    // Speed Data (stored in m/s)
+    let groundSpeed: Double?
+    let airSpeed: Double?     // True Air Speed (TAS)
+    
+    let track: Double?        // degrees
     let verticalRate: Double? // m/s
+
+    // Primary values for sorting/filtering
+    var altitude: Double? { altitudeBaro ?? altitudeGeo }
+    var velocity: Double? { groundSpeed ?? airSpeed }
+
+    // Validation
+    init?(
+        id: String,
+        callsign: String,
+        originCountry: String,
+        registration: String?,
+        aircraftType: String?,
+        coordinate: CLLocationCoordinate2D,
+        altitudeBaro: Double?,
+        altitudeGeo: Double?,
+        groundSpeed: Double?,
+        airSpeed: Double?,
+        track: Double?,
+        verticalRate: Double?
+    ) {
+        // Validate Inputs
+        guard !id.isEmpty else { return nil }
+        guard CLLocationCoordinate2DIsValid(coordinate) else { return nil }
+        guard coordinate.latitude != 0 && coordinate.longitude != 0 else { return nil } // Basic filter for bad data
+
+        self.id = id
+        self.callsign = callsign
+        self.originCountry = originCountry
+        self.registration = registration
+        self.aircraftType = aircraftType
+        self.coordinate = coordinate
+        self.altitudeBaro = altitudeBaro
+        self.altitudeGeo = altitudeGeo
+        self.groundSpeed = groundSpeed
+        self.airSpeed = airSpeed
+        self.track = track
+        self.verticalRate = verticalRate
+    }
 
     // Helper for formatting
     var formattedCallsign: String {
@@ -21,13 +66,53 @@ struct Flight: Identifiable, Hashable {
     }
 
     var formattedAltitude: String {
-        guard let alt = altitude else { return "N/A" }
-        return String(format: "%.0f ft", alt * 3.28084)
+        var parts: [String] = []
+        
+        if let baro = altitudeBaro {
+            parts.append("\(formatAltitudeValue(baro)) (MSL)")
+        }
+        
+        if let geo = altitudeGeo {
+            parts.append("\(formatAltitudeValue(geo)) (Geom)")
+        }
+        
+        if parts.isEmpty { return "N/A" }
+        return parts.joined(separator: "\n")
+    }
+    
+    private func formatAltitudeValue(_ meters: Double) -> String {
+        switch AppConfig.altitudeUnit {
+        case .feet:
+            return String(format: "%.0f ft", meters * 3.28084)
+        case .meters:
+            return String(format: "%.0f m", meters)
+        }
     }
 
     var formattedVelocity: String {
-        guard let vel = velocity else { return "N/A" }
-        return String(format: "%.0f kts", vel * 1.94384)
+        var parts: [String] = []
+        
+        if let gs = groundSpeed {
+            parts.append("\(formatSpeedValue(gs)) (GS)")
+        }
+        
+        if let tas = airSpeed {
+            parts.append("\(formatSpeedValue(tas)) (TAS)")
+        }
+        
+        if parts.isEmpty { return "N/A" }
+        return parts.joined(separator: "\n")
+    }
+    
+    private func formatSpeedValue(_ mps: Double) -> String {
+        switch AppConfig.speedUnit {
+        case .knots:
+            return String(format: "%.0f kts", mps * 1.94384)
+        case .mph:
+            return String(format: "%.0f mph", mps * 2.23694)
+        case .kph:
+            return String(format: "%.0f kph", mps * 3.6)
+        }
     }
 
     // Extract airline code from callsign (first 3 chars typically)
@@ -329,9 +414,7 @@ class FlightService {
 
     private func parseOpenSkyResponse(_ data: Data) throws -> [Flight] {
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let states = json["states"] as? [[Any]] else {
-            return []
-        }
+              let states = json["states"] as? [[Any]] else { return [] }
 
         return states.compactMap { stateArray -> Flight? in
             guard stateArray.count > 11,
@@ -342,10 +425,16 @@ class FlightService {
                   let lat = stateArray[6] as? Double
             else { return nil }
 
-            let altitude = stateArray[7] as? Double
+            let altitudeBaro = stateArray[7] as? Double
             let velocity = stateArray[9] as? Double
             let track = stateArray[10] as? Double
             let verticalRate = stateArray[11] as? Double
+            
+            // OpenSky states/all standard format usually goes up to index 16 but is variable
+            var altitudeGeo: Double? = nil
+            if stateArray.count > 13 {
+                altitudeGeo = stateArray[13] as? Double
+            }
 
             return Flight(
                 id: icao,
@@ -354,8 +443,10 @@ class FlightService {
                 registration: nil, // OpenSky doesn't provide registration
                 aircraftType: nil, // OpenSky doesn't provide aircraft type
                 coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon),
-                altitude: altitude,
-                velocity: velocity,
+                altitudeBaro: altitudeBaro,
+                altitudeGeo: altitudeGeo,
+                groundSpeed: velocity, // OpenSky velocity is ground speed
+                airSpeed: nil, // Not provided
                 track: track,
                 verticalRate: verticalRate
             )
@@ -365,9 +456,7 @@ class FlightService {
     private func parseADSBExchangeV2Response(_ data: Data) throws -> [Flight] {
         // ADSBExchange v2 format (used by adsb.lol, adsb.fi, airplanes.live)
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let aircraft = json["ac"] as? [[String: Any]] else {
-            return []
-        }
+              let aircraft = json["ac"] as? [[String: Any]] else { return [] }
 
         return aircraft.compactMap { ac -> Flight? in
             guard let hex = ac["hex"] as? String,
@@ -380,8 +469,13 @@ class FlightService {
             let registration = ac["r"] as? String // Tail number (e.g., N12345)
             let descCountry = ac["desc"] as? String // Country from description field
             let aircraftType = ac["t"] as? String // Aircraft type (e.g., B738)
-            let altBaro = ac["alt_baro"] as? Double // Altitude in feet
+            
+            let altBaro = ac["alt_baro"] as? Double // Altitude in feet (Barometric)
+            let altGeom = ac["alt_geom"] as? Double // Altitude in feet (Geometric)
+            
             let gs = ac["gs"] as? Double // Ground speed in knots
+            let tas = ac["tas"] as? Double // True air speed in knots
+            
             let track = ac["track"] as? Double
             let baroRate = ac["baro_rate"] as? Double // Vertical rate in ft/min
 
@@ -396,9 +490,13 @@ class FlightService {
                 country = desc
             }
 
-            // Convert units to match OpenSky format (meters and m/s)
-            let altitudeMeters = altBaro.map { $0 / 3.28084 }
-            let velocityMPS = gs.map { $0 / 1.94384 }
+            // Convert units to match internal storage (meters and m/s)
+            let altitudeBaroMeters = altBaro.map { $0 / 3.28084 }
+            let altitudeGeoMeters = altGeom.map { $0 / 3.28084 }
+            
+            let groundSpeedMPS = gs.map { $0 / 1.94384 }
+            let airSpeedMPS = tas.map { $0 / 1.94384 }
+            
             let verticalRateMPS = baroRate.map { $0 / 196.85 } // ft/min to m/s
 
             return Flight(
@@ -408,8 +506,10 @@ class FlightService {
                 registration: registration,
                 aircraftType: aircraftType,
                 coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon),
-                altitude: altitudeMeters,
-                velocity: velocityMPS,
+                altitudeBaro: altitudeBaroMeters,
+                altitudeGeo: altitudeGeoMeters,
+                groundSpeed: groundSpeedMPS,
+                airSpeed: airSpeedMPS,
                 track: track,
                 verticalRate: verticalRateMPS
             )
@@ -436,9 +536,7 @@ class FlightService {
         let (data, _) = try await URLSession.shared.data(for: request)
 
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let path = json["path"] as? [[Any]] else {
-            return []
-        }
+              let path = json["path"] as? [[Any]] else { return [] }
 
         return path.compactMap { point in
             guard point.count >= 3,
