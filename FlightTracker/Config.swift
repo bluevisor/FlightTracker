@@ -98,7 +98,13 @@ struct AppConfig {
     // Performance settings
     static var maxFlightsToDisplay: Int = 500 // Limit for UI performance
     static var refreshInterval: TimeInterval {
-        return 3.0 // Update every 3 seconds for smooth continuous updates
+        // Respect API rate limits per provider
+        switch provider {
+        case .opensky:
+            return 60.0  // 60 seconds for anonymous, can be lower with auth
+        case .adsbLol, .adsbFi, .airplanesLive:
+            return 5.0   // Conservative 5s for 1 req/sec APIs (allows buffer)
+        }
     }
 
     // Feature flags based on provider
@@ -108,7 +114,7 @@ struct AppConfig {
 
     // OpenSky authentication (optional)
     static var useOpenSkyAuth: Bool {
-        return provider == .opensky && Secrets.clientSecret != "DhHI9vrwhuWNe7FcbIemEu220afIWXcN"
+        return provider == .opensky && Secrets.clientSecret != "YOUR_CLIENT_SECRET_HERE"
     }
 
     // UI Customization

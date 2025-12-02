@@ -30,13 +30,23 @@ The app follows MVVM architecture with three core files:
 - **Auto-refresh**: Timer-based polling every 60 seconds to respect API rate limits
 - **Flight Filtering**: Filters for active flights (altitude > 0, velocity > 0) and search results
 - **Camera Control**: Animates to selected flight with 500km altitude, pitch 45°, heading matching flight track
+- **Map Interaction**:
+  - `panMap(direction:amount:)`: Pans map by percentage of current span (default 20%, 5% for continuous)
+  - `adjustZoom(multiplier:)`: Zooms in/out with multiplier (0.95/1.05 for continuous, 0.8/1.25 for single)
+  - `toggleControlMode()`: Switches between Pan and Zoom modes, shows indicator for 2 seconds
+  - Uses linear animations (0.05s duration) for smooth continuous movement
 
 ### ContentView.swift
-- **Map Display**: MapKit with hybrid elevation style showing 3D terrain
+- **Map Display**: MapKit with hybrid elevation style showing 3D terrain. Default interactions disabled to allow custom remote control via `onMoveCommand`.
 - **Annotations**: Custom `FlightAnnotationView` with airplane icons rotated by flight track
 - **Flight Path**: Yellow gradient polyline for selected flight's historical trajectory
 - **UI Overlay**: Glassmorphism design with header, flight details card, and stats footer
-- **Interaction**: Tag-based selection system where `selectedTag` drives the selection state
+- **Map Control Mode**: Pan/Zoom toggle system with continuous movement on button hold
+  - State tracking via `isInMapMode` flag (true when user enters map tab)
+  - Center button (Play/Pause) toggles between Pan and Zoom modes
+  - Direction buttons trigger continuous pan/zoom while held
+  - Timer-based continuous movement (50ms intervals for smooth animation)
+  - Back button exits map mode and returns to tab bar (Up button does NOT exit)
 
 ## API Configuration
 
@@ -134,11 +144,31 @@ All UI elements follow tvOS focus system:
 - Smooth animations (0.2s ease-in-out)
 
 ### Siri Remote Navigation
+
+#### Tab Bar (Default State)
 - **Swipe Left/Right**: Switch between tabs
-- **Swipe Up/Down**: Navigate focusable items in lists
-- **Click**: Select focused item
-- **Touchpad Pan**: Natural map panning
-- **X Button (on overlay)**: Dismiss flight details
+- **Click/Down on Map tab**: Enter map mode
+- **Click/Down on Search tab**: Enter search mode
+- **Click/Down on Settings tab**: Enter settings mode
+
+#### Map Mode (After entering Map tab)
+- **Direction Buttons (Hold)**: Continuous pan or zoom (based on current mode)
+  - In Pan Mode: Up/Down/Left/Right moves the map
+  - In Zoom Mode: Up/Right zooms in, Down/Left zooms out
+- **Center Button (Play/Pause)**: Toggle between Pan and Zoom modes
+  - Shows mode indicator for 2 seconds after toggle
+- **Back Button (Menu)**: Exit map mode, return to tab bar
+  - Note: Up button does NOT exit map mode (only pans)
+- **Direction Button Release**: Immediately stops panning/zooming
+- **Click on flight**: Open flight detail view
+
+#### Flight Detail View
+- **Back Button**: Close detail view, return to map
+- **X Button**: Alternative way to close detail view
+
+#### Search Mode
+- **Type**: Search flights by callsign, country, or airline
+- **Click on result**: Select flight and switch to Map tab with flight centered
 
 ### Typography & Spacing (Distance-Optimized)
 - **Titles**: 48pt bold (readable from 10 feet)

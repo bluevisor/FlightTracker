@@ -29,9 +29,22 @@
 		96F595442EDECE44009F96DD /* FlightTrackerUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FlightTrackerUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		96F5956A2EDF5C0A009F96DD /* Exceptions for "FlightTracker" folder in "FlightTracker" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 96F5952C2EDECE42009F96DD /* FlightTracker */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		96F5952F2EDECE42009F96DD /* FlightTracker */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				96F5956A2EDF5C0A009F96DD /* Exceptions for "FlightTracker" folder in "FlightTracker" target */,
+			);
 			path = FlightTracker;
 			sourceTree = "<group>";
 		};
@@ -400,7 +413,10 @@
 				DEVELOPMENT_TEAM = CKGXYS3R8N;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = FlightTracker/Info.plist;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.travel";
+				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "Eddie's Flight Tracker uses your location to show nearby flights";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Eddie's Flight Tracker uses your location to show nearby flights";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UIUserInterfaceStyle = Automatic;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -431,7 +447,10 @@
 				DEVELOPMENT_TEAM = CKGXYS3R8N;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = FlightTracker/Info.plist;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.travel";
+				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "Eddie's Flight Tracker uses your location to show nearby flights";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Eddie's Flight Tracker uses your location to show nearby flights";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UIUserInterfaceStyle = Automatic;
 				LD_RUNPATH_SEARCH_PATHS = (

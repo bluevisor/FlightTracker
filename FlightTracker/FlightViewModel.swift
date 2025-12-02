@@ -6,41 +6,25 @@ import CoreLocation
 @MainActor
 class FlightViewModel: ObservableObject {
     @Published var flights: [Flight] = []
-    @Published var selectedFlight: Flight?
+    @Published var selectedFlight: Flight? {
+        didSet {
+            print("✈️ selectedFlight changed: \(oldValue?.formattedCallsign ?? "nil") → \(selectedFlight?.formattedCallsign ?? "nil")")
+        }
+    }
     @Published var selectedFlightPath: [CLLocationCoordinate2D] = []
     @Published var showUI = true
-    @Published var showControlMode = false // Shows control mode UI
-    @Published var controlMode: ControlMode = .pan
     @Published var searchText = ""
     @Published var isLoading = false
     @Published var errorMessage: String?
 
-    enum ControlMode: String, CaseIterable {
-        case pan = "Pan"
-        case zoom = "Zoom"
-        case select = "Select"
-        case search = "Search"
-
-        var icon: String {
-            switch self {
-            case .pan: return "arrow.up.and.down.and.arrow.left.and.right"
-            case .zoom: return "plus.magnifyingglass"
-            case .select: return "hand.point.up"
-            case .search: return "magnifyingglass"
+    // Camera position for the map
+    @Published var cameraPosition: MapCameraPosition = .automatic {
+        didSet {
+            if let region = cameraPosition.region {
+                updateViewRegion(region)
             }
         }
     }
-
-    func nextControlMode() {
-        let allModes = ControlMode.allCases
-        if let currentIndex = allModes.firstIndex(of: controlMode) {
-            let nextIndex = (currentIndex + 1) % allModes.count
-            controlMode = allModes[nextIndex]
-        }
-    }
-    
-    // Camera position for the map
-    @Published var cameraPosition: MapCameraPosition = .automatic
 
     // User location
     @Published var userLocation: CLLocationCoordinate2D?
@@ -256,5 +240,23 @@ class FlightViewModel: ObservableObject {
                 $0.originCountry.localizedCaseInsensitiveContains(searchText)
             }
         }
+    }
+
+    
+    // MARK: - Map Control
+    
+    func adjustZoom(multiplier: Double) {
+        guard let region = currentViewRegion else {
+            return
+        }
+        let newSpan = MKCoordinateSpan(
+            latitudeDelta: max(0.01, min(180.0, region.span.latitudeDelta * multiplier)),
+            longitudeDelta: max(0.01, min(360.0, region.span.longitudeDelta * multiplier))
+        )
+        let newRegion = MKCoordinateRegion(center: region.center, span: newSpan)
+        withAnimation(.linear(duration: 0.05)) {
+            cameraPosition = .region(newRegion)
+        }
+        updateViewRegion(newRegion)
     }
 }

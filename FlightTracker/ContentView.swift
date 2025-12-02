@@ -3,130 +3,346 @@ import MapKit
 
 struct ContentView: View {
     @StateObject private var viewModel = FlightViewModel()
-    @State private var selectedTab: Tab = .map
+    @FocusState private var focusedFlightID: String?
     @State private var showingFlightDetail = false
-    @State private var mapCameraPosition: MapCameraPosition = .automatic
-    @State private var mapControlMode: MapControlMode = .pan
-    @State private var showControlModeIndicator = false
-    @FocusState private var focusedField: FocusableField?
-    @State private var searchSelection: String?
-    @State private var searchSort: SearchSortStyle = .relevance
-    
-    // Unit state for toggles
-    @State private var speedUnit: AppConfig.SpeedUnit = AppConfig.speedUnit
-    @State private var altitudeUnit: AppConfig.AltitudeUnit = AppConfig.altitudeUnit
+    @State private var zoomLevel: ZoomLevel = .medium
+    @State private var showZoomHUD = false
 
-    enum MapControlMode {
-        case pan
-        case zoom
-    }
+    enum ZoomLevel {
+        case close   // 1° span
+        case medium  // 5° span
+        case wide    // 20° span
 
-    enum Tab: String, CaseIterable {
-        case map = "Map"
-        case search = "Search"
-        case settings = "Settings"
-
-        var icon: String {
+        var span: Double {
             switch self {
-            case .map: return "map.fill"
-            case .search: return "magnifyingglass"
-            case .settings: return "gearshape.fill"
+            case .close: return 1.0
+            case .medium: return 5.0
+            case .wide: return 20.0
             }
         }
-    }
 
-    enum FocusableField: Hashable {
-        case searchField
-        case flightList
-        case mapControls
-        case tabBar
-        case settingsList
-    }
-    
-    enum SearchSortStyle: String, CaseIterable {
-        case relevance = "Relevance"
-        case altitude = "Altitude"
-        case speed = "Speed"
-        
-        var icon: String {
+        var label: String {
             switch self {
-            case .relevance: return "sparkle.magnifyingglass"
-            case .altitude: return "arrow.up.to.line"
-            case .speed: return "speedometer"
+            case .close: return "Close 🔍"
+            case .medium: return "Medium 🗺️"
+            case .wide: return "Wide 🌍"
             }
         }
     }
 
     var body: some View {
         ZStack {
-            // Background
-            Color.black.ignoresSafeArea()
-
-            // Main Content
-            if showingFlightDetail, let flight = viewModel.selectedFlight {
-                // Full-screen flight detail view
-                FlightDetailView(flight: flight, viewModel: viewModel, showingDetail: $showingFlightDetail)
-                    .transition(.move(edge: .bottom))
-            } else {
-                // Main tab view
-                TabView(selection: $selectedTab) {
-                    mapView
-                        .tag(Tab.map)
-                        .tabItem {
-                            Label("Map", systemImage: "map.fill")
+            // Full-screen map
+            Map(position: $viewModel.cameraPosition, interactionModes: []) {
+                ForEach(viewModel.flights) { flight in
+                    Annotation(flight.formattedCallsign, coordinate: flight.coordinate) {
+                        FlightAnnotationView(
+                            flight: flight,
+                            isFocused: focusedFlightID == flight.id,
+                            isSelected: viewModel.selectedFlight?.id == flight.id
+                        )
+                        .focusable()
+                        .focused($focusedFlightID, equals: flight.id)
+                        .onTapGesture {
+                            selectFlight(flight)
                         }
-
-                    searchView
-                        .tag(Tab.search)
-                        .tabItem {
-                            Label("Search", systemImage: "magnifyingglass")
-                        }
-
-                    settingsView
-                        .tag(Tab.settings)
-                        .tabItem {
-                            Label("Settings", systemImage: "gearshape.fill")
-                        }
+                    }
                 }
+
+                // Selected flight path
+                if !viewModel.selectedFlightPath.isEmpty {
+                    MapPolyline(coordinates: viewModel.selectedFlightPath)
+                        .stroke(Gradient(colors: [.clear, .yellow]), lineWidth: 4)
+                }
+            }
+            .mapStyle(.hybrid(elevation: .realistic))
+            .ignoresSafeArea()
+
+            // Zoom HUD (appears temporarily)
+            if showZoomHUD {
+                VStack {
+                    HStack(spacing: 12) {
+                        Image(systemName: "magnifyingglass")
+                            .font(.title2)
+                        Text("Zoom: \(zoomLevel.label)")
+                            .font(.headline)
+                    }
+                    .padding(.horizontal, 32)
+                    .padding(.vertical, 16)
+                    .background(.ultraThinMaterial)
+                    .cornerRadius(20)
+                    .shadow(radius: 20)
+                    .padding(.top, 60)
+
+                    Spacer()
+                }
+                .transition(.move(edge: .top).combined(with: .opacity))
+            }
+
+            // Flight info card (when flight selected)
+            if showingFlightDetail, let flight = viewModel.selectedFlight {
+                VStack {
+                    Spacer()
+
+                    FlightInfoCard(flight: flight, viewModel: viewModel, showingDetail: $showingFlightDetail)
+                        .transition(.move(edge: .bottom))
+                        .padding(.bottom, 200) // Above toolbar
+                }
+            }
+
+            // Bottom toolbar (always visible)
+            VStack {
+                Spacer()
+                BottomToolbar(
+                    viewModel: viewModel,
+                    onReset: resetMapView,
+                    onInfo: toggleFlightInfo,
+                    onSort: { /* TODO */ },
+                    onFilter: { /* TODO */ }
+                )
             }
         }
         .preferredColorScheme(.dark)
         .onAppear {
+            print("🚀 ContentView appeared")
             setupInitialMapPosition()
-            showControlModeIndicator = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                withAnimation { showControlModeIndicator = false }
-            }
         }
-        .onChange(of: showingFlightDetail) { oldValue, newValue in
-            // Selection persists when closing detail view
+        .onPlayPauseCommand {
+            cycleZoomLevel()
         }
-        .onChange(of: mapControlMode) { _, _ in
-            withAnimation { showControlModeIndicator = true }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                withAnimation { showControlModeIndicator = false }
-            }
-        }
-        // Sync config changes
-        .onChange(of: speedUnit) { _, newValue in
-            AppConfig.speedUnit = newValue
-        }
-        .onChange(of: altitudeUnit) { _, newValue in
-            AppConfig.altitudeUnit = newValue
-        }
-        .onChange(of: selectedTab) { _, newValue in
-            if newValue == .map {
-                focusedField = .mapControls
+        .onExitCommand {
+            if showingFlightDetail {
+                withAnimation {
+                    showingFlightDetail = false
+                }
             }
         }
     }
 
-    // MARK: - Map View
+    // MARK: - Helper Functions
 
-    private var mapView: some View {
+    private func selectFlight(_ flight: Flight) {
+        withAnimation(.easeInOut) {
+            viewModel.selectFlight(flight)
+            showingFlightDetail = true
+        }
+    }
+
+    private func setupInitialMapPosition() {
+        let center = viewModel.userLocation ?? CLLocationCoordinate2D(
+            latitude: AppConfig.defaultLatitude,
+            longitude: AppConfig.defaultLongitude
+        )
+        let region = MKCoordinateRegion(
+            center: center,
+            span: MKCoordinateSpan(latitudeDelta: zoomLevel.span, longitudeDelta: zoomLevel.span)
+        )
+        viewModel.cameraPosition = .region(region)
+        viewModel.updateViewRegion(region)
+    }
+
+    private func resetMapView() {
+        setupInitialMapPosition()
+    }
+
+    private func toggleFlightInfo() {
+        if viewModel.selectedFlight != nil {
+            withAnimation {
+                showingFlightDetail.toggle()
+            }
+        }
+    }
+
+    private func cycleZoomLevel() {
+        withAnimation(.easeInOut(duration: 0.6)) {
+            switch zoomLevel {
+            case .medium:
+                zoomLevel = .close
+            case .close:
+                zoomLevel = .wide
+            case .wide:
+                zoomLevel = .medium
+            }
+
+            // Update map region
+            guard let region = viewModel.currentViewRegion else { return }
+            let newSpan = MKCoordinateSpan(
+                latitudeDelta: zoomLevel.span,
+                longitudeDelta: zoomLevel.span
+            )
+            let newRegion = MKCoordinateRegion(center: region.center, span: newSpan)
+            viewModel.cameraPosition = .region(newRegion)
+        }
+
+        // Show HUD
+        withAnimation {
+            showZoomHUD = true
+        }
+        Task {
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            withAnimation {
+                showZoomHUD = false
+            }
+        }
+    }
+}
+
+// MARK: - Supporting Views
+
+struct FlightAnnotationView: View {
+    let flight: Flight
+    let isFocused: Bool
+    let isSelected: Bool
+
+    @State private var isPulsing = false
+
+    var iconSize: CGFloat {
+        if isSelected { return 64 }
+        if isFocused { return 56 }
+        return 32
+    }
+
+    var iconColor: Color {
+        (isFocused || isSelected) ? .yellow : .white
+    }
+
+    var body: some View {
+        VStack(spacing: 8) {
+            // Label (only when focused or selected)
+            if isFocused || isSelected {
+                VStack(spacing: 2) {
+                    Text(flight.formattedCallsign)
+                        .font(.system(size: 28, weight: .bold))
+                    Text(flight.formattedAltitude)
+                        .font(.system(size: 22, weight: .medium))
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(.ultraThinMaterial)
+                .cornerRadius(12)
+                .shadow(radius: 10)
+            }
+
+            // Airplane icon
+            Image(systemName: "airplane")
+                .resizable()
+                .scaledToFit()
+                .frame(width: iconSize, height: iconSize)
+                .rotationEffect(.degrees(flight.track ?? 0))
+                .foregroundStyle(iconColor)
+                .shadow(
+                    color: isFocused ? .yellow.opacity(0.8) : .black,
+                    radius: isFocused ? 20 : 4
+                )
+                .scaleEffect(isPulsing && isFocused ? 1.1 : 1.0)
+        }
+        .onChange(of: isFocused) { _, newValue in
+            if newValue {
+                withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) {
+                    isPulsing = true
+                }
+            } else {
+                withAnimation {
+                    isPulsing = false
+                }
+            }
+        }
+        .accessibilityLabel("""
+            \(flight.formattedCallsign), \
+            \(flight.originCountry), \
+            altitude \(flight.formattedAltitude), \
+            speed \(flight.formattedGroundSpeed), \
+            heading \(Int(flight.track ?? 0)) degrees
+        """)
+        .accessibilityHint("Double-tap to view flight details")
+    }
+}
+
+struct BottomToolbar: View {
+    @ObservedObject var viewModel: FlightViewModel
+    let onReset: () -> Void
+    let onInfo: () -> Void
+    let onSort: () -> Void
+    let onFilter: () -> Void
+
+    var body: some View {
+        HStack(spacing: 24) {
+            ToolbarButton(
+                icon: "location.circle.fill",
+                label: "Reset View",
+                action: onReset
+            )
+
+            ToolbarButton(
+                icon: "info.circle.fill",
+                label: viewModel.selectedFlight != nil ? "Flight Info" : "No Flight",
+                action: onInfo
+            )
+
+            ToolbarButton(
+                icon: "arrow.up.arrow.down.circle",
+                label: "Sort Flights",
+                action: onSort
+            )
+
+            ToolbarButton(
+                icon: "line.3.horizontal.decrease.circle",
+                label: "Filter",
+                action: onFilter
+            )
+        }
+        .padding(.horizontal, 60)
+        .padding(.vertical, 40)
+        .background(.ultraThinMaterial)
+        .ignoresSafeArea(edges: .bottom)
+    }
+}
+
+struct ToolbarButton: View {
+    let icon: String
+    let label: String
+    let action: () -> Void
+
+    @Environment(\.isFocused) var isFocused
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 12) {
+                Image(systemName: icon)
+                    .font(.system(size: 48))
+                Text(label)
+                    .font(.system(size: 24, weight: .semibold))
+                    .minimumScaleFactor(0.8)
+                    .lineLimit(1)
+            }
+            .frame(width: 280, height: 120)
+            .foregroundStyle(.white)
+        }
+        .buttonStyle(.plain)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(isFocused ? Color.white.opacity(0.3) : Color.white.opacity(0.1))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(isFocused ? .white : .clear, lineWidth: 3)
+        )
+        .scaleEffect(isFocused ? 1.15 : 1.0)
+        .shadow(radius: isFocused ? 30 : 10)
+        .animation(.easeInOut(duration: 0.2), value: isFocused)
+    }
+}
+
+struct FlightInfoCard: View {
+    let flight: Flight
+    @ObservedObject var viewModel: FlightViewModel
+    @Binding var showingDetail: Bool
+
+    var body: some View {
         ZStack {
             // Map Layer
-            Map(position: $mapCameraPosition, interactionModes: mapControlMode == .pan ? [.pan] : [.zoom]) {
+            Map(position: $viewModel.cameraPosition, interactionModes: []) {
                 if !viewModel.selectedFlightPath.isEmpty {
                     MapPolyline(coordinates: viewModel.selectedFlightPath)
                         .stroke(Gradient(colors: [.clear, .yellow]), lineWidth: 4)
@@ -136,6 +352,7 @@ struct ContentView: View {
                     Annotation(flight.formattedCallsign, coordinate: flight.coordinate) {
                         FlightAnnotationView(
                             flight: flight,
+                            isFocused: false,
                             isSelected: viewModel.selectedFlight?.id == flight.id
                         )
                     }
@@ -146,56 +363,13 @@ struct ContentView: View {
             .mapControls {
                 // Hide all map controls for cleaner view
             }
-            .onTapGesture {
-                toggleMapControlMode()
-            }
             .onMapCameraChange { context in
                 viewModel.updateViewRegion(context.region)
             }
             .ignoresSafeArea()
-            .onPlayPauseCommand {
-                toggleFocusBetweenMapAndList()
-            }
-            .onMoveCommand { direction in
-                guard focusedField == .mapControls, mapControlMode == .zoom else { return }
-                switch direction {
-                case .up, .right:
-                    adjustZoom(multiplier: 0.8)
-                case .down, .left:
-                    adjustZoom(multiplier: 1.25)
-                default:
-                    break
-                }
-            }
-            .focusable(true)
-            .focused($focusedField, equals: .mapControls)
-            .defaultFocus($focusedField, .mapControls)
 
             // UI Overlay
             VStack {
-                // Control Mode Indicator
-                if showControlModeIndicator {
-                    HStack {
-                        Spacer()
-
-                        HStack(spacing: 12) {
-                            Image(systemName: mapControlMode == .pan ? "arrow.up.and.down.and.arrow.left.and.right" : "plus.magnifyingglass")
-                                .font(.title2)
-                            Text(mapControlMode == .pan ? "Pan Mode" : "Zoom Mode")
-                                .font(.headline)
-                        }
-                        .padding(.horizontal, 24)
-                        .padding(.vertical, 12)
-                        .background(.ultraThinMaterial)
-                        .cornerRadius(20)
-                        .shadow(radius: 10)
-
-                        Spacer()
-                    }
-                    .padding(.top, 60)
-                    .transition(.move(edge: .top).combined(with: .opacity))
-                }
-
                 Spacer()
 
                 // Bottom Controls
@@ -206,8 +380,11 @@ struct ContentView: View {
                     }
 
                     Spacer()
+
+                    // Map Controls (Right Side)
+                    mapControlsPanel
                 }
-                .padding(.leading, 30)
+                .padding(.horizontal, 30)
                 .padding(.bottom, 60)
             }
 
@@ -217,6 +394,68 @@ struct ContentView: View {
                 bottomBar
             }
         }
+    }
+
+    private var mapControlsPanel: some View {
+        VStack(spacing: 16) {
+            Text("Map Controls")
+                .font(.headline)
+                .fontWeight(.bold)
+
+            VStack(spacing: 12) {
+                // Zoom In Button
+                Button {
+                    viewModel.adjustZoom(multiplier: 0.8)
+                } label: {
+                    HStack {
+                        Image(systemName: "plus.magnifyingglass")
+                            .font(.title3)
+                        Text("Zoom In")
+                            .font(.headline)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 16)
+                }
+                .buttonStyle(MapControlButtonStyle())
+
+                // Zoom Out Button
+                Button {
+                    viewModel.adjustZoom(multiplier: 1.25)
+                } label: {
+                    HStack {
+                        Image(systemName: "minus.magnifyingglass")
+                            .font(.title3)
+                        Text("Zoom Out")
+                            .font(.headline)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 16)
+                }
+                .buttonStyle(MapControlButtonStyle())
+
+                // Reset View Button
+                Button {
+                    resetMapView()
+                } label: {
+                    HStack {
+                        Image(systemName: "location.fill")
+                            .font(.title3)
+                        Text("Reset View")
+                            .font(.headline)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 16)
+                }
+                .buttonStyle(MapControlButtonStyle())
+            }
+        }
+        .padding(20)
+        .frame(width: 280)
+        .background {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(.ultraThinMaterial)
+        }
+        .shadow(color: Color.black.opacity(0.35), radius: 8, y: 6)
     }
 
     private var bottomBar: some View {
@@ -275,11 +514,15 @@ struct ContentView: View {
             ScrollView {
                 LazyVStack(spacing: 8) {
                     ForEach(Array(viewModel.flights.prefix(15))) { flight in
-                        FlightListItem(
-                            flight: flight,
-                            isSelected: viewModel.selectedFlight?.id == flight.id,
-                            isListFocused: focusedField == .flightList
-                        )
+                        Button {
+                            selectFlight(flight)
+                        } label: {
+                            FlightListItem(
+                                flight: flight,
+                                isSelected: viewModel.selectedFlight?.id == flight.id
+                            )
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
             }
@@ -290,213 +533,8 @@ struct ContentView: View {
         .background {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(.ultraThinMaterial)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(focusedField == .flightList ? Color.white : Color.clear, lineWidth: focusedField == .flightList ? 2 : 0)
-                )
         }
-        .shadow(color: focusedField == .flightList ? Color.white.opacity(0.25) : Color.black.opacity(0.35), radius: focusedField == .flightList ? 12 : 8, y: 6)
-        .focused($focusedField, equals: .flightList)
-        .onMoveCommand { direction in
-            guard focusedField == .flightList else { return }
-            switch direction {
-            case .up:
-                moveFlightSelection(by: -1)
-            case .down:
-                moveFlightSelection(by: 1)
-            default:
-                break
-            }
-        }
-        .onTapGesture {
-            if let selected = viewModel.selectedFlight {
-                selectFlight(selected)
-            }
-        }
-        .onChange(of: focusedField) { _, newValue in
-            if newValue == .flightList {
-                ensureFlightListSelection()
-            }
-        }
-    }
-
-    // MARK: - Search View
-
-    private var searchView: some View {
-        ZStack(alignment: .top) {
-            LinearGradient(
-                gradient: Gradient(colors: [
-                    Color(red: 0.09, green: 0.10, blue: 0.14),
-                    Color.black
-                ]),
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .ignoresSafeArea()
-
-            ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 18) {
-                    HStack(spacing: 14) {
-                        Image(systemName: "magnifyingglass")
-                            .font(.title2)
-                            .foregroundStyle(.secondary)
-                        TextField("Search flights by callsign, country, or airline", text: $viewModel.searchText)
-                            .font(.title3.weight(.semibold))
-                            .textFieldStyle(.plain)
-                            .focused($focusedField, equals: .searchField)
-                            .submitLabel(.search)
-                        if !viewModel.searchText.isEmpty {
-                            Button {
-                                viewModel.searchText = ""
-                                searchSelection = nil
-                            } label: {
-                                Image(systemName: "xmark.circle.fill")
-                                    .font(.title3)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .padding(18)
-                    .background(
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .fill(.ultraThinMaterial)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
-                            )
-                    )
-                    .padding(.top, 36)
-
-                    if orderedSearchResults.isEmpty {
-                        VStack(spacing: 14) {
-                            Image(systemName: "airplane.circle")
-                                .font(.system(size: 60))
-                                .foregroundStyle(.secondary)
-                            Text(viewModel.searchText.isEmpty ? "Start typing to search" : "No flights found right now")
-                                .font(.title3.weight(.semibold))
-                            Text("Try a callsign, airline code, or country.")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 60)
-                    } else {
-                        LazyVStack(spacing: 16) {
-                            ForEach(orderedSearchResults) { flight in
-                                SearchResultCard(
-                                    flight: flight,
-                                    isSelected: searchSelection == flight.id
-                                )
-                                .focusable()
-                                .onTapGesture {
-                                    searchSelection = flight.id
-                                    selectFlight(flight)
-                                    selectedTab = .map
-                                }
-                            }
-                        }
-                        .padding(.bottom, 60)
-                    }
-                }
-                .padding(.horizontal, 28)
-                .padding(.bottom, 40)
-            }
-        }
-        .onAppear {
-            focusedField = .searchField
-            searchSelection = nil
-        }
-        .onChange(of: viewModel.searchText) { _, _ in
-            searchSelection = nil
-        }
-    }
-    
-    private var orderedSearchResults: [Flight] {
-        viewModel.filteredFlights
-    }
-
-    // MARK: - Settings View
-
-    private var settingsView: some View {
-        VStack(spacing: 40) {
-            Text("Settings")
-                .font(.system(size: AppConfig.settingsTitleFontSize, weight: .bold))
-                .padding(.top, 100)
-
-            ScrollView {
-                VStack(spacing: 20) {
-                    // Unit Settings (New)
-                    Text("Units")
-                        .font(.system(size: AppConfig.settingsSectionHeaderFontSize, weight: .bold))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 100)
-
-                    HStack {
-                        Text("Speed Unit")
-                            .font(.system(size: AppConfig.settingsLabelFontSize, weight: .semibold))
-                        Spacer()
-                        Picker("Speed Unit", selection: $speedUnit) {
-                            ForEach(AppConfig.SpeedUnit.allCases, id: \.self) { unit in
-                                Text(unit.rawValue).tag(unit)
-                                    .font(.system(size: AppConfig.settingsValueFontSize))
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                        .frame(width: 360)
-                    }
-                    .padding(24)
-                    .background(.thinMaterial)
-                    .cornerRadius(20)
-                    .padding(.horizontal, 100)
-                    .focused($focusedField, equals: .settingsList)
-
-                    HStack {
-                        Text("Altitude Unit")
-                            .font(.system(size: AppConfig.settingsLabelFontSize, weight: .semibold))
-                        Spacer()
-                        Picker("Altitude Unit", selection: $altitudeUnit) {
-                            ForEach(AppConfig.AltitudeUnit.allCases, id: \.self) { unit in
-                                Text(unit.rawValue).tag(unit)
-                                    .font(.system(size: AppConfig.settingsValueFontSize))
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                        .frame(width: 360)
-                    }
-                    .padding(24)
-                    .background(.thinMaterial)
-                    .cornerRadius(20)
-                    .padding(.horizontal, 100)
-
-                    Divider()
-                        .padding(.horizontal, 100)
-                        .padding(.vertical, 20)
-
-                    // API Settings
-                    Text("API Settings")
-                        .font(.system(size: AppConfig.settingsSectionHeaderFontSize, weight: .bold))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 100)
-
-                    SettingRow(
-                        title: "Data Source",
-                        value: AppConfig.provider.rawValue,
-                        icon: "antenna.radiowaves.left.and.right"
-                    )
-
-                    SettingRow(
-                        title: "Refresh Interval",
-                        value: "\(Int(AppConfig.refreshInterval)) seconds",
-                        icon: "clock.fill"
-                    )
-                    
-                    // ... other settings
-                }
-            }
-            Spacer()
-        }
-        .background(Color.black.opacity(0.3))
+        .shadow(color: Color.black.opacity(0.35), radius: 8, y: 6)
     }
 
     // MARK: - Helper Functions
@@ -504,281 +542,43 @@ struct ContentView: View {
     private func selectFlight(_ flight: Flight) {
         withAnimation(.easeInOut) {
             viewModel.selectFlight(flight)
-            showingFlightDetail = true
-        }
-    }
-    
-    private func highlightFlight(_ flight: Flight) {
-        withAnimation(.easeInOut) {
-            viewModel.selectFlight(flight)
-            showingFlightDetail = false
-        }
-    }
-    
-    private func toggleFocusBetweenMapAndList() {
-        if focusedField == .flightList {
-            focusedField = .mapControls
-        } else {
-            focusedField = .flightList
-            ensureFlightListSelection()
-        }
-    }
-    
-    private func moveFlightSelection(by offset: Int) {
-        let list = Array(viewModel.flights.prefix(15))
-        guard !list.isEmpty else { return }
-        
-        let currentIndex = list.firstIndex(where: { $0.id == viewModel.selectedFlight?.id }) ?? -1
-        let nextIndex = max(0, min(list.count - 1, currentIndex + offset))
-        guard nextIndex != currentIndex else { return }
-        let nextFlight = list[nextIndex]
-        highlightFlight(nextFlight)
-    }
-    
-    private func toggleMapControlMode() {
-        withAnimation {
-            mapControlMode = mapControlMode == .pan ? .zoom : .pan
-        }
-        focusedField = .mapControls
-    }
-    
-    private func adjustZoom(multiplier: Double) {
-        guard let region = viewModel.currentViewRegion else { return }
-        let newSpan = MKCoordinateSpan(
-            latitudeDelta: max(0.01, region.span.latitudeDelta * multiplier),
-            longitudeDelta: max(0.01, region.span.longitudeDelta * multiplier)
-        )
-        let newRegion = MKCoordinateRegion(center: region.center, span: newSpan)
-        withAnimation {
-            mapCameraPosition = .region(newRegion)
-        }
-        viewModel.updateViewRegion(newRegion)
-    }
-    
-    private func ensureFlightListSelection() {
-        let list = Array(viewModel.flights.prefix(15))
-        guard !list.isEmpty else { return }
-        
-        if let selected = viewModel.selectedFlight,
-           list.contains(where: { $0.id == selected.id }) {
-            highlightFlight(selected)
-            return
-        }
-        
-        if let first = list.first {
-            highlightFlight(first)
+            showingDetail = true
         }
     }
 
-    private func setupInitialMapPosition() {
-        let center = viewModel.userLocation ?? CLLocationCoordinate2D(
-            latitude: AppConfig.defaultLatitude,
-            longitude: AppConfig.defaultLongitude
-        )
-        let region = MKCoordinateRegion(
-            center: center,
-            span: MKCoordinateSpan(latitudeDelta: 5.0, longitudeDelta: 5.0)
-        )
-        mapCameraPosition = .region(region)
-        viewModel.updateViewRegion(region)
+    private func resetMapView() {
+        // Reset to initial map position (this should reference the parent ContentView's method)
+        // For now, this is a placeholder that maintains current view
     }
 }
 
-// MARK: - Flight Detail View
+// MARK: - Custom Button Style for Map Controls
 
-struct FlightDetailView: View {
-    let flight: Flight
-    @ObservedObject var viewModel: FlightViewModel
-    @Binding var showingDetail: Bool
+struct MapControlButtonStyle: ButtonStyle {
+    @Environment(\.isFocused) var isFocused
 
-    var body: some View {
-        ZStack {
-            // Background gradient
-            LinearGradient(
-                colors: [Color.blue.opacity(0.3), Color.black],
-                startPoint: .top,
-                endPoint: .bottom
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(isFocused ? Color.white.opacity(0.3) : Color.white.opacity(0.1))
             )
-            .ignoresSafeArea()
-
-            ScrollView {
-                VStack(spacing: 24) {
-                    // Header with Airline Info
-                    VStack(spacing: 16) {
-                        // Airline logo placeholder and name
-                        if let airlineName = flight.airlineName {
-                            HStack(spacing: 12) {
-                                Image(systemName: "airplane.circle.fill")
-                                    .font(.system(size: 40))
-                                    .foregroundStyle(.blue)
-
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(airlineName)
-                                        .font(.system(size: AppConfig.detailLabelFontSize, weight: .bold))
-                                }
-                            }
-                            .padding(.top, 80)
-                        }
-
-                        Image(systemName: "airplane")
-                            .font(.system(size: 80))
-                            .foregroundStyle(.white)
-                            .rotationEffect(.degrees(flight.track ?? 0))
-                            .shadow(radius: 10)
-
-                        Text(flight.formattedCallsign)
-                            .font(.system(size: AppConfig.detailTitleFontSize, weight: .bold))
-                    }
-                    .padding(.top, flight.airlineName == nil ? 80 : 20)
-
-                    // Primary Info Grid (2x3)
-                    VStack(spacing: 16) {
-                        HStack(spacing: 16) {
-                            CompactInfoCard(
-                                icon: "flag.fill",
-                                title: "Country",
-                                value: flight.originCountry
-                            )
-
-                            if let registration = flight.registration {
-                                CompactInfoCard(
-                                    icon: "number",
-                                    title: "Tail Number",
-                                    value: registration
-                                )
-                            }
-
-                            if let aircraftType = flight.aircraftType {
-                                CompactInfoCard(
-                                    icon: "airplane.departure",
-                                    title: "Aircraft",
-                                    value: aircraftType
-                                )
-                            }
-                        }
-
-                        HStack(spacing: 16) {
-                            CompactInfoCard(
-                                icon: "arrow.up.to.line",
-                                title: "Altitude",
-                                value: flight.formattedAltitude
-                            )
-
-                            CompactInfoCard(
-                                icon: "speedometer",
-                                title: "Ground Speed",
-                                value: flight.formattedGroundSpeed
-                            )
-
-                            CompactInfoCard(
-                                icon: "safari",
-                                title: "Heading",
-                                value: String(format: "%.0f°", flight.track ?? 0)
-                            )
-                        }
-
-                        if let vert = flight.verticalRate {
-                            HStack(spacing: 16) {
-                                CompactInfoCard(
-                                    icon: vert > 0 ? "arrow.up.right" : "arrow.down.right",
-                                    title: "Vertical Rate",
-                                    value: String(format: "%.0f ft/min", vert * 196.85),
-                                    color: vert > 0 ? .green : .red
-                                )
-
-                                CompactInfoCard(
-                                    icon: "location.fill",
-                                    title: "ICAO24",
-                                    value: flight.id.uppercased()
-                                )
-
-                                CompactInfoCard(
-                                    icon: "globe",
-                                    title: "Coordinates",
-                                    value: String(format: "%.2f, %.2f",
-                                                flight.coordinate.latitude,
-                                                flight.coordinate.longitude)
-                                )
-                            }
-                        }
-
-                        if !viewModel.selectedFlightPath.isEmpty {
-                            CompactInfoCard(
-                                icon: "point.3.connected.trianglepath.dotted",
-                                title: "Track Points",
-                                value: "\(viewModel.selectedFlightPath.count) positions"
-                            )
-                        }
-                    }
-                    .padding(.horizontal, 100)
-
-                    // Back Button
-                    Button(action: {
-                        withAnimation {
-                            showingDetail = false
-                        }
-                    }) {
-                        HStack(spacing: 8) {
-                            Image(systemName: "arrow.left.circle.fill")
-                                .font(.title3)
-                            Text("Back to Map")
-                                .font(.subheadline)
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 8)
-                        .background(.ultraThinMaterial)
-                        .cornerRadius(16)
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.bottom, 40)
-                }
-            }
-        }
-        .onExitCommand {
-            withAnimation {
-                showingDetail = false
-            }
-        }
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(isFocused ? Color.white : Color.clear, lineWidth: 2)
+            )
+            .scaleEffect(isFocused ? 1.05 : 1.0)
+            .brightness(configuration.isPressed ? -0.2 : 0)
+            .animation(.easeInOut(duration: 0.2), value: isFocused)
     }
 }
 
-// Compact info card for detail view
-struct CompactInfoCard: View {
-    let icon: String
-    let title: String
-    let value: String
-    var color: Color = .white
-
-    var body: some View {
-        VStack(spacing: 8) {
-            Image(systemName: icon)
-                .font(.system(size: 20))
-                .foregroundStyle(color)
-
-            Text(title)
-                .font(.system(size: 14)) // Small label
-                .foregroundStyle(.secondary)
-
-            Text(value)
-                .font(.system(size: AppConfig.detailValueFontSize, weight: .semibold))
-                .multilineTextAlignment(.center)
-                .lineLimit(3)
-                .minimumScaleFactor(0.6)
-        }
-        .frame(maxWidth: .infinity)
-        .frame(height: 120)
-        .padding(12)
-        .background(.ultraThinMaterial)
-        .cornerRadius(16)
-    }
-}
-
-// MARK: - Supporting Views
+// MARK: - Supporting Views (keeping existing implementations)
 
 struct FlightListItem: View {
     let flight: Flight
     let isSelected: Bool
-    let isListFocused: Bool
+    @Environment(\.isFocused) var isFocused
 
     var body: some View {
         HStack(spacing: 10) {
@@ -811,19 +611,21 @@ struct FlightListItem: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .background(rowBackground)
+        .background(
+            isFocused ? Color.white.opacity(0.3) :
+            isSelected ? Color.white.opacity(0.2) : Color.white.opacity(0.05)
+        )
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(isSelected ? Color.white : Color.clear, lineWidth: isSelected ? 2 : 0)
+                .stroke(
+                    isFocused ? Color.white :
+                    isSelected ? Color.white.opacity(0.6) : Color.clear,
+                    lineWidth: isFocused ? 3 : isSelected ? 2 : 0
+                )
         )
         .cornerRadius(8)
-        .scaleEffect((isListFocused && isSelected) ? 1.05 : 1.0)
-        .animation(.easeInOut(duration: 0.2), value: isListFocused && isSelected)
-    }
-    
-    private var rowBackground: Color {
-        if isListFocused && isSelected { return Color.white.opacity(0.2) }
-        return Color.white.opacity(0.05)
+        .scaleEffect(isFocused ? 1.05 : 1.0)
+        .animation(.easeInOut(duration: 0.2), value: isFocused)
     }
 }
 
@@ -929,22 +731,185 @@ struct SettingRow: View {
     }
 }
 
-struct FlightAnnotationView: View {
+// Flight Detail View
+struct FlightDetailView: View {
     let flight: Flight
-    let isSelected: Bool
+    @ObservedObject var viewModel: FlightViewModel
+    @Binding var showingDetail: Bool
 
     var body: some View {
-        Image(systemName: "airplane")
-            .resizable()
-            .scaledToFit()
-            .frame(
-                width: isSelected ? AppConfig.mapIconSizeSelected : AppConfig.mapIconSize,
-                height: isSelected ? AppConfig.mapIconSizeSelected : AppConfig.mapIconSize
+        ZStack {
+            // Background gradient
+            LinearGradient(
+                colors: [Color.blue.opacity(0.3), Color.black],
+                startPoint: .top,
+                endPoint: .bottom
             )
-            .rotationEffect(.degrees(flight.track ?? 0))
-            .foregroundStyle(isSelected ? .yellow : .white)
-            .shadow(radius: isSelected ? 10 : 2)
-            .animation(.spring, value: isSelected)
+            .ignoresSafeArea()
+
+            ScrollView {
+                VStack(spacing: 24) {
+                    // Header with Airline Info
+                    VStack(spacing: 16) {
+                        // Airline logo placeholder and name
+                        if let airlineName = flight.airlineName {
+                            HStack(spacing: 12) {
+                                Image(systemName: "airplane.circle.fill")
+                                    .font(.system(size: 40))
+                                    .foregroundStyle(.blue)
+
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(airlineName)
+                                        .font(.system(size: AppConfig.detailLabelFontSize, weight: .bold))
+                                }
+                            }
+                            .padding(.top, 80)
+                        }
+
+                        Image(systemName: "airplane")
+                            .font(.system(size: 80))
+                            .foregroundStyle(.white)
+                            .rotationEffect(.degrees(flight.track ?? 0))
+                            .shadow(radius: 10)
+
+                        Text(flight.formattedCallsign)
+                            .font(.system(size: AppConfig.detailTitleFontSize, weight: .bold))
+                    }
+                    .padding(.top, flight.airlineName == nil ? 80 : 20)
+
+                    // Primary Info Grid
+                    VStack(spacing: 16) {
+                        HStack(spacing: 16) {
+                            CompactInfoCard(
+                                icon: "flag.fill",
+                                title: "Country",
+                                value: flight.originCountry
+                            )
+
+                            if let registration = flight.registration {
+                                CompactInfoCard(
+                                    icon: "number",
+                                    title: "Tail Number",
+                                    value: registration
+                                )
+                            }
+
+                            if let aircraftType = flight.aircraftType {
+                                CompactInfoCard(
+                                    icon: "airplane.departure",
+                                    title: "Aircraft",
+                                    value: aircraftType
+                                )
+                            }
+                        }
+
+                        HStack(spacing: 16) {
+                            CompactInfoCard(
+                                icon: "arrow.up.to.line",
+                                title: "Altitude",
+                                value: flight.formattedAltitude
+                            )
+
+                            CompactInfoCard(
+                                icon: "speedometer",
+                                title: "Ground Speed",
+                                value: flight.formattedGroundSpeed
+                            )
+
+                            CompactInfoCard(
+                                icon: "safari",
+                                title: "Heading",
+                                value: String(format: "%.0f°", flight.track ?? 0)
+                            )
+                        }
+
+                        if let vert = flight.verticalRate {
+                            HStack(spacing: 16) {
+                                CompactInfoCard(
+                                    icon: vert > 0 ? "arrow.up.right" : "arrow.down.right",
+                                    title: "Vertical Rate",
+                                    value: String(format: "%.0f ft/min", vert * 196.85),
+                                    color: vert > 0 ? .green : .red
+                                )
+
+                                CompactInfoCard(
+                                    icon: "location.fill",
+                                    title: "ICAO24",
+                                    value: flight.id.uppercased()
+                                )
+
+                                CompactInfoCard(
+                                    icon: "globe",
+                                    title: "Coordinates",
+                                    value: String(format: "%.2f, %.2f",
+                                                flight.coordinate.latitude,
+                                                flight.coordinate.longitude)
+                                )
+                            }
+                        }
+
+                        if !viewModel.selectedFlightPath.isEmpty {
+                            CompactInfoCard(
+                                icon: "point.3.connected.trianglepath.dotted",
+                                title: "Track Points",
+                                value: "\(viewModel.selectedFlightPath.count) positions"
+                            )
+                        }
+                    }
+                    .padding(.horizontal, 100)
+
+                    // Back Button
+                    Button(action: {
+                        withAnimation {
+                            showingDetail = false
+                        }
+                    }) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "arrow.left.circle.fill")
+                                .font(.title3)
+                            Text("Back to Map")
+                                .font(.subheadline)
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(.ultraThinMaterial)
+                        .cornerRadius(16)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.bottom, 40)
+                }
+            }
+        }
+    }
+}
+
+struct CompactInfoCard: View {
+    let icon: String
+    let title: String
+    let value: String
+    var color: Color = .white
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Image(systemName: icon)
+                .font(.system(size: 20))
+                .foregroundStyle(color)
+
+            Text(title)
+                .font(.system(size: 14))
+                .foregroundStyle(.secondary)
+
+            Text(value)
+                .font(.system(size: AppConfig.detailValueFontSize, weight: .semibold))
+                .multilineTextAlignment(.center)
+                .lineLimit(3)
+                .minimumScaleFactor(0.6)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 120)
+        .padding(12)
+        .background(.ultraThinMaterial)
+        .cornerRadius(16)
     }
 }
 
