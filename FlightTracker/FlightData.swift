@@ -66,18 +66,15 @@ struct Flight: Identifiable, Hashable {
     }
 
     var formattedAltitude: String {
-        var parts: [String] = []
-        
         if let baro = altitudeBaro {
-            parts.append("\(formatAltitudeValue(baro)) (MSL)")
+            return "\(formatAltitudeValue(baro)) MSL"
         }
         
         if let geo = altitudeGeo {
-            parts.append("\(formatAltitudeValue(geo)) (Geom)")
+            return formatAltitudeValue(geo)
         }
         
-        if parts.isEmpty { return "N/A" }
-        return parts.joined(separator: "\n")
+        return "N/A"
     }
     
     private func formatAltitudeValue(_ meters: Double) -> String {
@@ -113,6 +110,16 @@ struct Flight: Identifiable, Hashable {
         case .kph:
             return String(format: "%.0f kph", mps * 3.6)
         }
+    }
+    
+    var formattedGroundSpeed: String {
+        if let gs = groundSpeed {
+            return formatSpeedValue(gs)
+        }
+        if let tasFallback = airSpeed {
+            return formatSpeedValue(tasFallback)
+        }
+        return "N/A"
     }
 
     // Extract airline code from callsign (first 3 chars typically)

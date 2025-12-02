@@ -112,12 +112,24 @@ struct AppConfig {
     }
 
     // UI Customization
-    static var mapIconSize: CGFloat = 28 // Size of airplane icons on map (normal state)
-    static var mapIconSizeSelected: CGFloat = 56 // Size when selected (2x normal)
+    static var mapIconSize: CGFloat = 32 // Size of airplane icons on map (normal state)
+    static var mapIconSizeSelected: CGFloat = 42 // Size when selected
     static var listIconSize: CGFloat = 24 // Size in flight list
     static var listFontSize: CGFloat = 24 // Font size in flight list
     static var searchIconSize: CGFloat = 50 // Size in search results
     static var searchFontSize: CGFloat = 22 // Font size in search results
+    static var appTitleFontSize: CGFloat = 42 // Font size for "Eddie's Flight Tracker" app title
+
+    // Settings UI Fonts
+    static var settingsTitleFontSize: CGFloat = 48
+    static var settingsSectionHeaderFontSize: CGFloat = 28
+    static var settingsLabelFontSize: CGFloat = 34 // "Speed Unit", "Data Source"
+    static var settingsValueFontSize: CGFloat = 28 // "Knots", "OpenSky" - Same as label per request
+
+    // Detail View Fonts
+    static var detailTitleFontSize: CGFloat = 48
+    static var detailLabelFontSize: CGFloat = 32
+    static var detailValueFontSize: CGFloat = 34
 
     // Unit Settings
     enum SpeedUnit: String, CaseIterable {
