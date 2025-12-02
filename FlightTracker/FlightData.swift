@@ -39,48 +39,131 @@ struct Flight: Identifiable, Hashable {
 
 // MARK: - Service
 
+struct TokenResponse: Decodable {
+    let access_token: String
+    let expires_in: Int
+}
+
 class FlightService {
-    private let baseURL = "https://opensky-network.org/api/states/all"
-    private let trackURL = "https://opensky-network.org/api/tracks/all"
+    private let provider: ADSBProvider
+    private let authURL = "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token"
+
+    private var accessToken: String?
+    private var tokenExpiration: Date?
+
+    init(provider: ADSBProvider = AppConfig.provider) {
+        self.provider = provider
+    }
+
+    private func statesURL(lat: Double, lon: Double, radius: Double) -> String {
+        switch provider {
+        case .opensky:
+            return "\(provider.baseURL)/states/all"
+        case .adsbLol, .adsbFi, .airplanesLive:
+            // Geographic query using provided location
+            return "\(provider.baseURL)/lat/\(lat)/lon/\(lon)/dist/\(Int(radius))"
+        }
+    }
+
+    private func trackURL(for icao24: String) -> String {
+        switch provider {
+        case .opensky:
+            return "\(provider.baseURL)/tracks/all?icao24=\(icao24)&time=0"
+        case .adsbLol, .adsbFi, .airplanesLive:
+            // These APIs don't support historical tracks
+            return ""
+        }
+    }
     
-    func fetchFlights() async throws -> [Flight] {
-        guard let url = URL(string: baseURL) else { return [] }
+    private func getValidToken() async throws -> String {
+        if let token = accessToken, let expiration = tokenExpiration, expiration > Date() {
+            return token
+        }
         
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 30 // Fail faster if connection is bad
+        guard Secrets.clientSecret != "YOUR_CLIENT_SECRET_HERE" else {
+            throw NSError(domain: "FlightTracker", code: 401, userInfo: [NSLocalizedDescriptionKey: "Missing API Credentials"])
+        }
+        
+        var request = URLRequest(url: URL(string: authURL)!)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        
+        let body = "grant_type=client_credentials&client_id=\(Secrets.clientId)&client_secret=\(Secrets.clientSecret)"
+        request.httpBody = body.data(using: .utf8)
         
         let (data, response) = try await URLSession.shared.data(for: request)
         
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            print("Auth failed: \(String(data: data, encoding: .utf8) ?? "Unknown error")")
+            throw NSError(domain: "FlightTracker", code: 401, userInfo: [NSLocalizedDescriptionKey: "Authentication failed"])
+        }
+        
+        let tokenResponse = try JSONDecoder().decode(TokenResponse.self, from: data)
+        self.accessToken = tokenResponse.access_token
+        self.tokenExpiration = Date().addingTimeInterval(TimeInterval(tokenResponse.expires_in - 60)) // 60s buffer
+        
+        return tokenResponse.access_token
+    }
+    
+    func fetchFlights(lat: Double? = nil, lon: Double? = nil, radius: Double? = nil) async throws -> [Flight] {
+        // Use provided coordinates or fall back to config defaults
+        let latitude = lat ?? AppConfig.defaultLatitude
+        let longitude = lon ?? AppConfig.defaultLongitude
+        let searchRadius = radius ?? AppConfig.apiRadius
+
+        let urlString = statesURL(lat: latitude, lon: longitude, radius: searchRadius)
+        print("📡 Fetching from: \(urlString)")
+        guard let url = URL(string: urlString) else { return [] }
+
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 30
+
+        // Only try OpenSky authentication if using OpenSky and credentials present
+        if provider == .opensky && AppConfig.useOpenSkyAuth {
+            do {
+                let token = try await getValidToken()
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            } catch {
+                print("Auth error, falling back to anonymous: \(error)")
+            }
+        }
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
         guard let httpResponse = response as? HTTPURLResponse else {
             throw URLError(.badServerResponse)
         }
         
+        print("📥 Response status: \(httpResponse.statusCode), data size: \(data.count) bytes")
+
         if httpResponse.statusCode == 429 {
             throw NSError(domain: "FlightTracker", code: 429, userInfo: [NSLocalizedDescriptionKey: "Rate limit exceeded. Please wait a moment."])
         }
-        
+
         guard httpResponse.statusCode == 200 else {
             throw NSError(domain: "FlightTracker", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Server error: \(httpResponse.statusCode)"])
         }
+
+        // Parse based on provider
+        let flights: [Flight]
+        switch provider {
+        case .opensky:
+            flights = try parseOpenSkyResponse(data)
+        case .adsbLol, .adsbFi, .airplanesLive:
+            flights = try parseADSBExchangeV2Response(data)
+        }
         
-        // Use JSONSerialization for performance with large mixed-type arrays
+        print("✈️ Parsed \(flights.count) flights from API")
+        return flights
+    }
+
+    private func parseOpenSkyResponse(_ data: Data) throws -> [Flight] {
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let states = json["states"] as? [[Any]] else {
             return []
         }
-        
+
         return states.compactMap { stateArray -> Flight? in
-            // Index mapping:
-            // 0: icao24 (String)
-            // 1: callsign (String)
-            // 2: origin_country (String)
-            // 5: longitude (Double)
-            // 6: latitude (Double)
-            // 7: baro_altitude (Double)
-            // 9: velocity (Double)
-            // 10: true_track (Double)
-            // 11: vertical_rate (Double)
-            
             guard stateArray.count > 11,
                   let icao = stateArray[0] as? String,
                   let callsign = stateArray[1] as? String,
@@ -88,12 +171,12 @@ class FlightService {
                   let lon = stateArray[5] as? Double,
                   let lat = stateArray[6] as? Double
             else { return nil }
-            
+
             let altitude = stateArray[7] as? Double
             let velocity = stateArray[9] as? Double
             let track = stateArray[10] as? Double
             let verticalRate = stateArray[11] as? Double
-            
+
             return Flight(
                 id: icao,
                 callsign: callsign,
@@ -106,19 +189,71 @@ class FlightService {
             )
         }
     }
+
+    private func parseADSBExchangeV2Response(_ data: Data) throws -> [Flight] {
+        // ADSBExchange v2 format (used by adsb.lol, adsb.fi, airplanes.live)
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let aircraft = json["ac"] as? [[String: Any]] else {
+            return []
+        }
+
+        return aircraft.compactMap { ac -> Flight? in
+            guard let hex = ac["hex"] as? String,
+                  let lat = ac["lat"] as? Double,
+                  let lon = ac["lon"] as? Double
+            else { return nil }
+
+            // Extract optional fields
+            let callsign = (ac["flight"] as? String)?.trimmingCharacters(in: .whitespaces) ?? hex
+            let country = ac["r"] as? String ?? "Unknown" // Registration as proxy for country
+            let altBaro = ac["alt_baro"] as? Double // Altitude in feet
+            let gs = ac["gs"] as? Double // Ground speed in knots
+            let track = ac["track"] as? Double
+            let baroRate = ac["baro_rate"] as? Double // Vertical rate in ft/min
+
+            // Convert units to match OpenSky format (meters and m/s)
+            let altitudeMeters = altBaro.map { $0 / 3.28084 }
+            let velocityMPS = gs.map { $0 / 1.94384 }
+            let verticalRateMPS = baroRate.map { $0 / 196.85 } // ft/min to m/s
+
+            return Flight(
+                id: hex,
+                callsign: callsign,
+                originCountry: country,
+                coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon),
+                altitude: altitudeMeters,
+                velocity: velocityMPS,
+                track: track,
+                verticalRate: verticalRateMPS
+            )
+        }
+    }
     
     func fetchTrack(for icao24: String) async throws -> [CLLocationCoordinate2D] {
-        guard let url = URL(string: "\(trackURL)?icao24=\(icao24)&time=0") else { return [] }
-        
-        let (data, _) = try await URLSession.shared.data(from: url)
-        
+        // Only OpenSky supports historical tracks
+        guard provider.supportsHistoricalTracks else {
+            return []
+        }
+
+        let urlString = trackURL(for: icao24)
+        guard !urlString.isEmpty, let url = URL(string: urlString) else { return [] }
+
+        var request = URLRequest(url: url)
+
+        if AppConfig.useOpenSkyAuth {
+            if let token = try? await getValidToken() {
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            }
+        }
+
+        let (data, _) = try await URLSession.shared.data(for: request)
+
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let path = json["path"] as? [[Any]] else {
             return []
         }
-        
+
         return path.compactMap { point in
-            // path point: [time, lat, lon, alt, heading, onGround]
             guard point.count >= 3,
                   let lat = point[1] as? Double,
                   let lon = point[2] as? Double else { return nil }
