@@ -24,7 +24,7 @@ A beautiful, real-time flight tracking application for Apple TV, built with Swif
 
 1. Clone this repository:
    ```bash
-   git clone https://github.com/yourusername/FlightTracker.git
+   git clone https://github.com/bluevisor/FlightTracker.git
    ```
 
 2. Open `FlightTracker.xcodeproj` in Xcode
